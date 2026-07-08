@@ -1,0 +1,281 @@
+---
+title: "M05: Reflection on Odds, Log(Odds), Odds Ratio, and Log(OR)"
+author: "Aldo Naranjo"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 4
+    toc-expand: 1
+    toc-location: right-body
+    toc-title: "Contents"
+    number-sections: true
+    code-fold: show
+    code-tools: true
+    theme: cosmo
+    highlight-style: github
+    df-print: paged
+    embed-resources: true
+execute:
+  warning: false
+  message: false
+  freeze: true
+---
+
+```{r}
+#| label: setup
+#| include: false
+library(tidyverse)
+library(tidymodels)
+library(conflicted)
+conflict_prefer("fisher.test", winner = "stats")
+conflict_prefer("chisq.test", winner = "stats")
+conflict_prefer("filter", winner = "dplyr")
+tidymodels_prefer(quiet = FALSE)
+set.seed(2024)
+```
+
+```{r}
+#| label: build-mail-data
+#| code-fold: true
+
+# Recreate the direct-mail dataset used throughout this module
+set.seed(123)
+n <- 3000
+
+mail_data <- tibble(
+  customer_id = paste0("C", str_pad(1:n, 5, pad = "0")),
+  age = round(rnorm(n, mean = 45, sd = 12)),
+  income = round(rlnorm(n, meanlog = 10.8, sdlog = 0.6)),
+  recency_days = round(rexp(n, rate = 1 / 60)),
+  freq_12mo = rpois(n, lambda = 3),
+  avg_order_amt = round(rlnorm(n, meanlog = 4.2, sdlog = 0.5), 2),
+  channel = sample(
+    c("email", "direct_mail", "digital"),
+    n,
+    replace = TRUE,
+    prob = c(0.5, 0.3, 0.2)
+  ),
+  region = sample(
+    c("West", "South", "Midwest", "Northeast"),
+    n,
+    replace = TRUE
+  ),
+  loyalty_tier = sample(
+    c("Bronze", "Silver", "Gold", "Platinum"),
+    n,
+    replace = TRUE,
+    prob = c(0.4, 0.3, 0.2, 0.1)
+  ),
+  responded = rbinom(
+    n,
+    1,
+    prob = plogis(
+      -3 +
+        0.02 * (age - 45) +
+        0.3 * log(income / 50000) +
+        0.1 * freq_12mo -
+        0.005 * recency_days
+    )
+  )
+) |>
+  mutate(
+    income = if_else(runif(n) < 0.08, NA_real_, income),
+    avg_order_amt = if_else(runif(n) < 0.05, NA_real_, avg_order_amt),
+    responded = factor(responded, levels = c(1, 0), labels = c("yes", "no"))
+  )
+
+glimpse(mail_data)
+```
+
+## Odds and Log(Odds) {#sec-odds}
+
+> **Video:** Odds and Log(Odds), Clearly Explained!!!
+
+### Probability vs. Odds
+
+> *Compute the probability and odds of responding given 142 yes out of 3,000. What does an odds of 0.05 mean for a marketer?*
+
+```{r}
+yes <- 142
+no <- 3000 - 142
+
+# Probability
+p <- yes / (yes + no)
+p
+
+# Odds
+odds <- yes / no
+odds
+
+# Or equivalently
+p / (1 - p)
+```
+
+The probability of responding is about 4.7%, and the odds work out to roughly 0.0497. For a marketer, odds of 0.05, basically 1 in 20, means that for every customer who responds, about 20 don't. It's the same underlying rate as the percentage, just framed as a ratio of successes to failures instead, which matters once we start comparing groups against each other.
+
+### Converting Between Probability and Odds
+
+> *Compute odds for probabilities of 20%, 50%, and 80%. What happens to odds as probability approaches 1?*
+
+```{r}
+prob_to_odds <- function(p) p / (1 - p)
+
+prob_to_odds(0.20)
+prob_to_odds(0.50)
+prob_to_odds(0.80)
+```
+
+At 20% probability the odds are 0.25. At 50% they're exactly 1. At 80% they jump up to 4. The pattern is that odds grow way faster than probability does as probability gets close to 1, since the $(1 - P)$ part of the denominator keeps shrinking. That's the asymmetry that makes raw odds annoying to work with, odds against something are squeezed between 0 and 1, but odds in favor stretch all the way from 1 to infinity.
+
+### Why Log(Odds)?
+
+> *Compute log(odds) for probabilities 0.10, 0.50, and 0.90. Verify log(odds) at P = 0.50 equals 0. Are the values symmetric around 0?*
+
+```{r}
+probs <- c(0.10, 0.50, 0.90)
+odds_vals <- probs / (1 - probs)
+log_odds <- log(odds_vals)
+
+tibble(probability = probs, odds = odds_vals, log_odds = log_odds)
+```
+
+At $P = 0.50$ the odds are exactly 1, and $\log(1) = 0$, which tracks: a coin flip has no lean either direction, so the log(odds) sits right at the neutral middle. The log(odds) for 0.10 and 0.90 come out symmetric around zero (about -2.2 and 2.2). That symmetry is the whole point, it fixes the lopsided compression problem from the previous exercise and puts both directions of the relationship on the same footing.
+
+### The Logit Function
+
+> *Compute the overall response rate and convert to log(odds). Write code to convert .pred_yes to log(odds).*
+
+```{r}
+# Overall response rate
+p_respond <- mean(mail_data$responded == "yes")
+p_respond
+
+# Convert to log(odds)
+log(p_respond / (1 - p_respond))
+```
+
+To turn a predicted probability like `.pred_yes` into log(odds), it's the same formula:
+
+``` r
+log(preds$.pred_yes / (1 - preds$.pred_yes))
+```
+
+### Log(Odds) and the Normal Distribution
+
+> *Why might log(odds) following a normal distribution make logistic regression a natural choice? Why is working in log(odds) space more convenient than probability space for a linear model?*
+
+Same idea as raw income being right-skewed and getting nicer once you log it, the log(odds) of a binary outcome tends to look more symmetric than the raw probability does. Logistic regression is basically modeling a linear relationship in log(odds) space, so if log(odds) values land roughly normal, that lines up well with how linear models work.
+
+Working in log(odds) space is also just more convenient because probability is stuck between 0 and 1, which is awkward for a linear equation to spit out directly. A linear predictor like $\beta_0 + \beta_1 X$ can output any number, but probability can't go past those bounds. Log(odds) can range across all real numbers though, so the model can output whatever log(odds) value it wants and then convert it back into a valid probability using the logistic function.
+
+## Odds Ratios and Log(Odds Ratios) {#sec-or}
+
+> **Video:** Odds Ratios and Log(Odds Ratios), Clearly Explained!!!
+
+### What Is an Odds Ratio?
+
+> *Compute the odds of responding for Gold vs. Bronze customers and the odds ratio. Is Gold a stronger or weaker predictor than Bronze?*
+
+```{r}
+tier_summary <- mail_data |>
+  group_by(loyalty_tier) |>
+  summarise(
+    yes = sum(responded == "yes"),
+    no = sum(responded == "no"),
+    odds = yes / no
+  )
+
+tier_summary
+
+# Odds ratio: Gold vs Bronze
+gold_odds <- tier_summary |> filter(loyalty_tier == "Gold") |> pull(odds)
+bronze_odds <- tier_summary |> filter(loyalty_tier == "Bronze") |> pull(odds)
+
+OR <- gold_odds / bronze_odds
+OR
+```
+
+Going by the computed odds ratio, Gold tier customers have higher odds of responding than Bronze, since the ratio comes out above 1. So Gold tier is a stronger positive predictor of response than Bronze, which is the baseline here.
+
+### Asymmetry and Log(Odds Ratio)
+
+> *Compute log(OR). Compute the reverse direction odds ratio and its log. Why is log(OR) = 0 the reference point for "no relationship"?*
+
+```{r}
+# Log odds ratio
+log(OR)
+
+# Reverse direction
+OR_reverse <- bronze_odds / gold_odds
+log(OR_reverse)
+```
+
+The log(OR) for Gold vs. Bronze is positive, and flipping it (Bronze vs. Gold) gives the exact same number but negative. That's the same symmetry from the log(odds) exercise showing up again, just one level up: flipping the comparison flips the sign but not the size. Log(OR) = 0 is the "no relationship" point because that's what an odds ratio of exactly 1 looks like, the odds are identical between the two groups and neither one has an edge.
+
+### Effect Size Interpretation
+
+> *Compute odds ratios for all four loyalty tiers against Bronze. Which has the strongest and weakest association? How would you communicate the strongest result to a non-technical manager?*
+
+```{r}
+tier_summary |>
+  mutate(OR_vs_bronze = odds / bronze_odds, log_OR = log(OR_vs_bronze)) |>
+  arrange(desc(abs(log_OR)))
+```
+
+Looking at the magnitude of log(OR), whichever tier lands at the top of this sorted table has the strongest tie to response, and whichever is closest to zero has the weakest. To explain the strongest result to a non-technical manager I'd keep it simple: "customers in our top loyalty tier are roughly X times more likely to respond than our entry-level customers," using the plain odds ratio instead of the log version since that's just way more intuitive for a general audience.
+
+### Fisher's Exact Test
+
+> *Build a 2×2 table for Gold vs. Bronze and run fisher.test(). Is the difference statistically significant? When would you prefer Fisher's over chi-square?*
+
+```{r}
+gold_bronze <- mail_data |>
+  filter(loyalty_tier %in% c("Gold", "Bronze"))
+
+ct <- table(gold_bronze$loyalty_tier, gold_bronze$responded)
+ct
+
+fisher.test(ct)
+```
+
+The p-value from Fisher's Exact Test tells us whether the response rate difference between Gold and Bronze customers is something we'd expect to see just by chance. If it's below 0.05 we'd call the difference statistically significant. Fisher's tends to be the better pick over chi-square when any cell in the contingency table has a small count, since chi-square leans on a large-sample approximation that can get unreliable once cells get sparse.
+
+### Chi-Square Test
+
+> *Run chisq.test() on the same table. Compare to Fisher's. With 3,000 rows, which is more appropriate?*
+
+```{r}
+chisq.test(ct)
+```
+
+With 3,000 rows total, the cell counts here are big enough that chi-square's large-sample approximation holds up fine, so both tests should land in roughly the same place. Given the size of the dataset, chi-square is the more appropriate and simpler pick. Fisher's earns its keep more in smaller samples where chi-square's assumptions start to wobble.
+
+### Wald Test Concept
+
+> *What does it mean for a log(odds ratio) to be "many standard deviations from zero"? How does Lasso's penalty relate to the Wald test's goal? What practical guideline does the video suggest?*
+
+For a log(odds ratio) to be many standard deviations from zero basically means the effect is big relative to how uncertain we are about it, which gives us confidence the relationship is real and not just noise. That's exactly what the Wald test formalizes, dividing the coefficient by its standard error and checking how far that lands from a normal curve centered at zero.
+
+The Lasso penalty used elsewhere in this course is going after something similar but in a different way. The Wald test checks significance after the model is already fit, while Lasso actively shrinks weak or redundant coefficients down to exactly zero during fitting itself, so it's doing variable selection as part of the model rather than as a separate test afterward. Both are trying to figure out which predictors actually matter, just through different mechanisms.
+
+The video's guideline is that there's no real consensus on which test to use, people mix and match. Some use Fisher's or chi-square just for the p-value but lean on Wald specifically for confidence intervals, while others let Wald handle both so they stay consistent. The general advice is just to check what's standard in your field, and to trust a borderline result more if it holds up across all three tests instead of just one.
+
+### Connecting Odds Ratios to Logistic Regression
+
+> *If the freq_12mo coefficient is positive, what does that imply about odds of responding? Why does step_normalize() make it easier to compare coefficients across predictors with different units?*
+
+If the coefficient on `freq_12mo` is positive, that means as a customer's purchase frequency goes up over the past 12 months, the log(odds) of responding goes up too, so more frequent buyers are more likely to respond.
+
+`step_normalize()` puts every numeric predictor on the same centered, unit-variance scale before fitting. Without it, comparing a coefficient on income (in tens of thousands of dollars) to one on frequency (small counts) would be misleading, since part of each coefficient's size is just an artifact of whatever units that variable happens to be in. Once everything's normalized, each coefficient represents the effect of a one standard deviation change, which makes it actually fair to compare them against each other.
+
+------------------------------------------------------------------------
+
+# Appendix {#sec-appendix}
+
+-   **Published report (GitHub Pages):** <https://naran115.github.io/M05-classnotes/Naranjo,%20Aldo-M05-classnotes.html>
+-   **GitHub Repository:** <https://github.com/naran115/M05-classnotes>
+
+::: {.callout-note title="Note on appendix links"}
+Update these URLs after creating the repo and enabling GitHub Pages. The file path in the Pages link should match the exact rendered HTML filename.
+:::
