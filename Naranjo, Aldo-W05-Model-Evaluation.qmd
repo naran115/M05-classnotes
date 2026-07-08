@@ -173,7 +173,7 @@ test_preds_030 |>
   metric_set(precision, sens)(truth = responded, estimate = .pred_class_030)
 ```
 
-Dropping the threshold from 0.5 to 0.3 makes it easier for a customer to get labeled "yes," since the model only needs to be 30% confident instead of 50%. That pulls more of the actual responders into the "yes" bucket, which raises sensitivity, we catch more of the people who would have bought. The tradeoff is precision usually drops, because along with those extra true positives we also start scooping up more non-responders who just happened to clear the lower bar. In marketing terms, lowering the threshold means mailing a wider net, catching more buyers but also spending more on people who were never going to respond.
+Interestingly, sensitivity stayed at 0 even after lowering the threshold to 0.3, and precision is still undefined (NA) at both thresholds. That means dropping the bar to 0.3 didn't catch a single additional responder, which tells me the model's predicted probabilities for "yes" never even reach 0.3 for anyone in the test set, responders included. Normally lowering the threshold trades precision for sensitivity, since it's easier to clear a lower bar. Here that tradeoff never kicks in, because the model isn't confident enough about anyone to cross even a 0.3 cutoff. That's a bigger red flag than a simple threshold issue: it points to the model's predicted probabilities being compressed into a narrow, low range rather than spread out across the 0 to 1 range, which would need to be fixed before threshold-tuning is even a useful lever here.
 
 ## Exercise 9.2 — ROC/AUC Interpretation and Custom `metric_set()`
 
@@ -194,6 +194,8 @@ auc_val
 *Note: after knitting, plug the printed AUC number from `auc_val` into the sentence below where it says "____%".*
 
 Looking at the printed value above, this model's AUC comes out to 0.473, well below the 0.65 "usable for targeting" bar from the callout, and notably below 0.5 as well, which is the score a model gets by assigning probabilities at random. Completing the sentence from the prompt: if we randomly pick one customer who responded and one who did not, the model assigns a higher predicted probability to the responder about 47% of the time, meaning it's actually slightly worse than a coin flip at telling the two groups apart. That's a strong signal this model isn't ready to drive targeting decisions and needs real rework, whether that's better features, a different algorithm, or revisiting how the outcome variable was constructed.
+
+If the budget only covers the top 10% of prospects, I'd want to operate on the far left edge of the ROC curve, the low false-positive-rate corner. That point corresponds to using a high probability threshold, so only the customers the model is most confident about get mailed. It sacrifices sensitivity (we'll miss some responders further down the ranked list) but keeps the mailed group small and tightly targeted, which matches a fixed budget better than chasing overall sensitivity. That said, given how weak this model's AUC is, even that top-10% slice is unlikely to be meaningfully better targeted than a random sample right now.
 
 ### Part B — Custom `metric_set()`
 
